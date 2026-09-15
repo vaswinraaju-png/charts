@@ -7,6 +7,37 @@ export default async function handler(req, res) {
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
   if (!ANTHROPIC_API_KEY) return res.status(500).json({ error: 'ANTHROPIC_API_KEY not set' })
 
+  const ALLOWED_PATTERNS = `
+CANDLESTICK PATTERNS (single or multi-candle):
+- Morning Star (bullish, forms at support)
+- Evening Star (bearish, forms at resistance)
+- Bullish Engulfing (bullish, forms at support)
+- Bearish Engulfing (bearish, forms at resistance)
+- Hammer (bullish, forms at support)
+- Hanging Man (bearish, forms at resistance)
+- Inverted Hammer (bullish, forms at support)
+- Shooting Star (bearish, forms at resistance)
+- Doji (indecision, anywhere)
+- Spinning Top (indecision, anywhere)
+- Harami (indecision, anywhere)
+- Marubozu (strong momentum, direction depends on color)
+
+CHART PATTERNS:
+- Rising Wedge (bearish reversal/continuation)
+- Falling Wedge (bullish reversal/continuation)
+- Bullish Pennant (bullish continuation, after strong breakout)
+- Bearish Pennant (bearish continuation, after strong breakdown)
+- Bullish Rectangle (bullish continuation)
+- Bearish Rectangle (bearish continuation)
+- Double Bottom (bullish reversal, W shape)
+- Double Top (bearish reversal, M shape)
+- Head and Shoulders (bearish reversal)
+- Inverted Head and Shoulders (bullish reversal)
+- Descending Triangle (bearish, flat support + falling resistance)
+- Ascending Triangle (bullish, flat resistance + rising support)
+- Symmetrical Triangle (indecision, wait for breakout)
+`
+
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -29,38 +60,53 @@ export default async function handler(req, res) {
               type: 'text',
               text: `You are an expert technical analyst. Analyze this candlestick chart for ${symbol} on ${resolution} timeframe.
 
-The X-axis shows dates. The chart has ${timestamps ? timestamps.length : 'multiple'} candles.
-${timestamps ? `Date range: ${timestamps[0]} to ${timestamps[timestamps.length-1]}` : ''}
+${timestamps ? `Date range visible: ${timestamps[0]} to ${timestamps[timestamps.length-1]}` : ''}
 
-IMPORTANT: For each pattern, identify EXACTLY when it appears by reading the X-axis dates carefully.
-Provide startDate and endDate so the pattern can be highlighted on the correct portion of the chart.
+STRICT RULE: You must ONLY identify patterns from this exact list. Do NOT identify any other patterns not in this list:
+${ALLOWED_PATTERNS}
 
-Return ONLY a valid JSON array:
+TRADING RULES (from the methodology):
+- Bullish patterns are valid ONLY when formed at support zones
+- Bearish patterns are valid ONLY when formed at resistance zones
+- Indecision patterns (Doji, Spinning Top, Harami, Symmetrical Triangle): wait for confirmation, protect capital
+- Entry: ALWAYS after confirmation candle closes
+- Stop Loss: previous swing low (for buys) or previous swing high (for sells)
+- Need 2 or more confluences before signaling a trade
+- For uptrend: buy at pullback with bullish signal, SL = previous low, target = next resistance
+- For downtrend: sell at pullback with bearish signal, SL = previous high, target = next support
+
+Read the X-axis dates carefully. For each pattern found, provide the exact date range where it appears.
+
+If NO patterns from the allowed list are found, return an empty array [].
+
+Return ONLY a valid JSON array, no other text:
 [
   {
-    "pattern": "Double Top",
-    "signal": "Bearish",
+    "pattern": "Hammer",
+    "signal": "Bullish",
     "confidence": "High",
-    "notes": "Two peaks at same resistance level",
+    "location": "at support zone",
+    "notes": "Hammer formed at key support, long lower wick rejecting sellers",
     "startDate": "2024-06-10",
-    "endDate": "2024-06-18",
-    "entry": 24020,
-    "stopLoss": 24200,
-    "target1": 23800,
-    "target2": 23600,
+    "endDate": "2024-06-10",
+    "confluences": ["at support level", "after downtrend", "high volume candle"],
+    "tradeValid": true,
+    "entry": 23150,
+    "stopLoss": 22950,
+    "target1": 23400,
+    "target2": 23650,
     "drawLines": [
-      {"type": "resistance", "price": 24150, "label": "Double Top"},
-      {"type": "support", "price": 23900, "label": "Neckline"},
-      {"type": "entry", "price": 24020, "label": "Entry"},
-      {"type": "sl", "price": 24200, "label": "SL"},
-      {"type": "target", "price": 23800, "label": "T1"},
-      {"type": "target", "price": 23600, "label": "T2"}
+      {"type": "support", "price": 23000, "label": "Support Zone"},
+      {"type": "entry", "price": 23150, "label": "Entry"},
+      {"type": "sl", "price": 22950, "label": "Stop Loss"},
+      {"type": "target", "price": 23400, "label": "Target 1"},
+      {"type": "target", "price": 23650, "label": "Target 2"}
     ]
   }
 ]
 
-Line types: resistance, support, entry, sl, target, trendline_high, trendline_low
-Read X-axis dates carefully for startDate/endDate. Return valid JSON only.`
+For indecision patterns (Doji, Spinning Top, Harami, Symmetrical Triangle), set "tradeValid": false and omit entry/SL/target.
+Only include patterns you are confident about. Return [] if nothing clear from the allowed list.`
             }
           ]
         }]
@@ -75,9 +121,9 @@ Read X-axis dates carefully for startDate/endDate. Return valid JSON only.`
     try {
       const jsonMatch = text.match(/\[[\s\S]*\]/)
       if (jsonMatch) patterns = JSON.parse(jsonMatch[0])
-      else patterns = [{ pattern: 'Analysis', signal: 'Neutral', notes: text, confidence: 'N/A', drawLines: [] }]
+      else patterns = []
     } catch (e) {
-      patterns = [{ pattern: 'Analysis', signal: 'Neutral', notes: text, confidence: 'N/A', drawLines: [] }]
+      patterns = []
     }
 
     return res.json({ patterns })
