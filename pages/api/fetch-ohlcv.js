@@ -32,7 +32,13 @@ export default async function handler(req, res) {
       }
     )
 
-    const fyersData = await fyersRes.json()
+    const rawText = await fyersRes.text()
+    let fyersData
+    try {
+      fyersData = JSON.parse(rawText)
+    } catch (e) {
+      return res.status(500).json({ error: 'Fyers returned invalid JSON', raw: rawText.slice(0, 300) })
+    }
 
     if (fyersData.s !== 'ok') {
       return res.status(400).json({ error: fyersData.message || 'Fyers API error', details: fyersData })
