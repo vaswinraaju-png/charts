@@ -164,11 +164,14 @@ export default function Home() {
       const timestamps = visibleCandles.map(c => c.timestamp.slice(0,10))
       const res = await fetch('/api/detect-patterns', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageBase64: base64, symbol, resolution, timestamps })
+        body: JSON.stringify({ imageBase64: base64, symbol, resolution, timestamps, candles })
       })
       const data = await res.json()
       if (data.error) setStatus('Error: ' + data.error)
-      else { setPatterns(data.patterns||[]); setStatus(`Found ${data.patterns?.length||0} pattern(s)`) }
+      else {
+        setPatterns(data.patterns||[])
+        setStatus(`Found ${data.patterns?.length||0} pattern(s) — ${data.chartPatternCount||0} chart, ${data.candlePatternCount||0} candlestick`)
+      }
     } catch(e) { setStatus('Error: ' + e.message) }
     setDetecting(false)
   }
