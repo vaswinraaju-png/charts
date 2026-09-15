@@ -12,17 +12,18 @@ export default async function handler(req, res) {
   const APP_ID = process.env.FYERS_APP_ID
 
   try {
+    // Fetch from Fyers
     const params = new URLSearchParams({
       symbol,
       resolution: resolution || 'D',
       date_format: '1',
-      range_from: date_from || getDateNDaysAgo(resolution === 'D' || resolution === '1W' || resolution === '1M' ? 365 : 100),
+      range_from: date_from || getDateNDaysAgo(365),
       range_to: date_to || getToday(),
       cont_flag: '1'
     })
 
     const fyersRes = await fetch(
-      `https://api-t1.fyers.in/data/history?${params}`,
+      `https://api-t1.fyers.in/api/v3/history?${params}`,
       {
         headers: {
           Authorization: `${APP_ID}:${access_token}`,
@@ -36,7 +37,7 @@ export default async function handler(req, res) {
     try {
       fyersData = JSON.parse(rawText)
     } catch (e) {
-      return res.status(500).json({ error: 'Fyers returned invalid JSON', raw: rawText.slice(0, 500) })
+      return res.status(500).json({ error: 'Fyers returned invalid JSON', raw: rawText.slice(0, 300) })
     }
 
     if (fyersData.s !== 'ok') {
@@ -54,6 +55,7 @@ export default async function handler(req, res) {
       volume: c[5]
     }))
 
+    // Upsert into Supabase
     const { error } = await supabase
       .from('candles')
       .upsert(candles, { onConflict: 'symbol,resolution,timestamp' })
