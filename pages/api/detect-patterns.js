@@ -1,7 +1,7 @@
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  const { imageBase64, symbol, resolution, timeframe } = req.body
+  const { imageBase64, symbol, resolution } = req.body
   if (!imageBase64) return res.status(400).json({ error: 'imageBase64 required' })
 
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
@@ -17,55 +17,48 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: 'claude-opus-4-5',
-        max_tokens: 1024,
+        max_tokens: 2048,
         messages: [
           {
             role: 'user',
             content: [
               {
                 type: 'image',
-                source: {
-                  type: 'base64',
-                  media_type: 'image/png',
-                  data: imageBase64
-                }
+                source: { type: 'base64', media_type: 'image/png', data: imageBase64 }
               },
               {
                 type: 'text',
                 text: `You are an expert technical analyst. Analyze this candlestick chart for ${symbol} on ${resolution} timeframe.
 
-Identify any of these chart patterns if present:
-- Triangle patterns (Ascending, Descending, Symmetrical)
-- Double Top / Double Bottom
-- Head and Shoulders / Inverse Head and Shoulders
-- Flag / Pennant
-- Cup and Handle
-- Wedge (Rising, Falling)
-- Channel (Uptrend, Downtrend)
-- Support / Resistance levels
+Identify chart patterns and key price levels. For EVERY pattern and level, you MUST provide exact price numbers so they can be drawn on the chart.
 
-For each pattern found, provide:
-1. Pattern name
-2. Where it appears (recent, middle, early part of chart)
-3. Bullish or Bearish signal
-4. Suggested entry price zone
-5. Stop loss zone
-6. Target price zone
-7. Confidence level (High/Medium/Low)
-
-If no clear patterns, say so honestly. Be concise and specific. Format as JSON array like:
+Return ONLY a JSON array, no other text:
 [
   {
-    "pattern": "Ascending Triangle",
-    "location": "recent",
-    "signal": "Bullish",
-    "entry": "24200-24250",
-    "stopLoss": "23950",
-    "target": "24650",
+    "pattern": "Double Top",
+    "signal": "Bearish",
     "confidence": "High",
-    "notes": "Flat resistance at 24250 with higher lows forming"
+    "notes": "Brief description",
+    "priceLevel": 23430,
+    "entry": 23200,
+    "entryHigh": 23220,
+    "stopLoss": 23450,
+    "target1": 23050,
+    "target2": 22900,
+    "drawLines": [
+      {"type": "resistance", "price": 23430, "label": "Double Top Resistance"},
+      {"type": "support", "price": 23200, "label": "Neckline"},
+      {"type": "entry", "price": 23200, "label": "Entry"},
+      {"type": "sl", "price": 23450, "label": "Stop Loss"},
+      {"type": "target", "price": 23050, "label": "Target 1"},
+      {"type": "target", "price": 22900, "label": "Target 2"}
+    ]
   }
-]`
+]
+
+Line types: "resistance" (purple dashed), "support" (blue dashed), "entry" (white solid), "sl" (red solid), "target" (green solid), "trendline_high" (orange), "trendline_low" (orange).
+
+Be specific with prices. Read the Y-axis carefully. Return valid JSON only.`
               }
             ]
           }
@@ -74,27 +67,19 @@ If no clear patterns, say so honestly. Be concise and specific. Format as JSON a
     })
 
     const data = await response.json()
-
-    if (!response.ok) {
-      return res.status(500).json({ error: data.error?.message || 'Claude API error', details: data })
-    }
+    if (!response.ok) return res.status(500).json({ error: data.error?.message || 'Claude API error' })
 
     const text = data.content[0]?.text || ''
-
-    // Extract JSON from response
     let patterns = []
     try {
       const jsonMatch = text.match(/\[[\s\S]*\]/)
-      if (jsonMatch) {
-        patterns = JSON.parse(jsonMatch[0])
-      } else {
-        patterns = [{ pattern: 'Analysis', signal: 'See notes', notes: text, confidence: 'N/A' }]
-      }
+      if (jsonMatch) patterns = JSON.parse(jsonMatch[0])
+      else patterns = [{ pattern: 'Analysis', signal: 'Neutral', notes: text, confidence: 'N/A', drawLines: [] }]
     } catch (e) {
-      patterns = [{ pattern: 'Analysis', signal: 'See notes', notes: text, confidence: 'N/A' }]
+      patterns = [{ pattern: 'Analysis', signal: 'Neutral', notes: text, confidence: 'N/A', drawLines: [] }]
     }
 
-    return res.json({ patterns, raw: text })
+    return res.json({ patterns })
   } catch (e) {
     return res.status(500).json({ error: e.message })
   }
