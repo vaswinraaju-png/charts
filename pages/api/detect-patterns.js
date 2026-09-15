@@ -1,7 +1,7 @@
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
-  const { imageBase64, symbol, resolution } = req.body
+  const { imageBase64, symbol, resolution, timestamps } = req.body
   if (!imageBase64) return res.status(400).json({ error: 'imageBase64 required' })
 
   const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY
@@ -18,51 +18,52 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: 'claude-opus-4-5',
         max_tokens: 2048,
-        messages: [
-          {
-            role: 'user',
-            content: [
-              {
-                type: 'image',
-                source: { type: 'base64', media_type: 'image/png', data: imageBase64 }
-              },
-              {
-                type: 'text',
-                text: `You are an expert technical analyst. Analyze this candlestick chart for ${symbol} on ${resolution} timeframe.
+        messages: [{
+          role: 'user',
+          content: [
+            {
+              type: 'image',
+              source: { type: 'base64', media_type: 'image/png', data: imageBase64 }
+            },
+            {
+              type: 'text',
+              text: `You are an expert technical analyst. Analyze this candlestick chart for ${symbol} on ${resolution} timeframe.
 
-Identify chart patterns and key price levels. For EVERY pattern and level, you MUST provide exact price numbers so they can be drawn on the chart.
+The X-axis shows dates. The chart has ${timestamps ? timestamps.length : 'multiple'} candles.
+${timestamps ? `Date range: ${timestamps[0]} to ${timestamps[timestamps.length-1]}` : ''}
 
-Return ONLY a JSON array, no other text:
+IMPORTANT: For each pattern, identify EXACTLY when it appears by reading the X-axis dates carefully.
+Provide startDate and endDate so the pattern can be highlighted on the correct portion of the chart.
+
+Return ONLY a valid JSON array:
 [
   {
     "pattern": "Double Top",
     "signal": "Bearish",
     "confidence": "High",
-    "notes": "Brief description",
-    "priceLevel": 23430,
-    "entry": 23200,
-    "entryHigh": 23220,
-    "stopLoss": 23450,
-    "target1": 23050,
-    "target2": 22900,
+    "notes": "Two peaks at same resistance level",
+    "startDate": "2024-06-10",
+    "endDate": "2024-06-18",
+    "entry": 24020,
+    "stopLoss": 24200,
+    "target1": 23800,
+    "target2": 23600,
     "drawLines": [
-      {"type": "resistance", "price": 23430, "label": "Double Top Resistance"},
-      {"type": "support", "price": 23200, "label": "Neckline"},
-      {"type": "entry", "price": 23200, "label": "Entry"},
-      {"type": "sl", "price": 23450, "label": "Stop Loss"},
-      {"type": "target", "price": 23050, "label": "Target 1"},
-      {"type": "target", "price": 22900, "label": "Target 2"}
+      {"type": "resistance", "price": 24150, "label": "Double Top"},
+      {"type": "support", "price": 23900, "label": "Neckline"},
+      {"type": "entry", "price": 24020, "label": "Entry"},
+      {"type": "sl", "price": 24200, "label": "SL"},
+      {"type": "target", "price": 23800, "label": "T1"},
+      {"type": "target", "price": 23600, "label": "T2"}
     ]
   }
 ]
 
-Line types: "resistance" (purple dashed), "support" (blue dashed), "entry" (white solid), "sl" (red solid), "target" (green solid), "trendline_high" (orange), "trendline_low" (orange).
-
-Be specific with prices. Read the Y-axis carefully. Return valid JSON only.`
-              }
-            ]
-          }
-        ]
+Line types: resistance, support, entry, sl, target, trendline_high, trendline_low
+Read X-axis dates carefully for startDate/endDate. Return valid JSON only.`
+            }
+          ]
+        }]
       })
     })
 
