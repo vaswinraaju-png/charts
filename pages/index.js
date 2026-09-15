@@ -6,7 +6,31 @@ const BULL = '#1baf7a'
 const BEAR = '#e34948'
 const CPR_COLOR = '#f59e0b'
 const SR_COLOR = '#6366f1'
+const DOJI_COLOR = '#a78bfa'
 const PAD = { t: 20, r: 16, b: 30, l: 65 }
+
+// Doji detection
+function detectDoji(candle) {
+  const body = Math.abs(candle.close - candle.open)
+  const range = candle.high - candle.low
+  if (range === 0) return null
+  const upperWick = candle.high - Math.max(candle.open, candle.close)
+  const lowerWick = Math.min(candle.open, candle.close) - candle.low
+  const bodyRatio = body / range
+
+  if (bodyRatio > 0.1) return null // not a doji
+
+  // Dragonfly: long lower wick, tiny upper wick
+  if (lowerWick > range * 0.6 && upperWick < range * 0.1) {
+    return { type: 'Dragonfly Doji', label: 'DF', bullish: true }
+  }
+  // Gravestone: long upper wick, tiny lower wick
+  if (upperWick > range * 0.6 && lowerWick < range * 0.1) {
+    return { type: 'Gravestone Doji', label: 'GS', bullish: false }
+  }
+  // Standard Doji
+  return { type: 'Doji', label: 'D', bullish: null }
+}
 
 export default function Home() {
   const mainRef = useRef(null)
@@ -18,8 +42,10 @@ export default function Home() {
   const [status, setStatus] = useState('')
   const [showCPR, setShowCPR] = useState(false)
   const [showSR, setShowSR] = useState(false)
+  const [showDoji, setShowDoji] = useState(false)
   const [candles, setCandles] = useState([])
   const [stats, setStats] = useState(null)
+  const [patterns, setPatterns] = useState([])
 
   async function getAuthURL() {
     const res = await fetch('/api/auth')
@@ -66,6 +92,7 @@ export default function Home() {
     if (data.candles && data.candles.length) {
       setCandles(data.candles)
       computeStats(data.candles)
+      detectPatterns(data.candles)
       setStatus(`Loaded ${data.candles.length} candles`)
     } else {
       setStatus('No data. Fetch first.')
@@ -85,6 +112,15 @@ export default function Home() {
     })
   }
 
+  function detectPatterns(data) {
+    const found = []
+    data.forEach((c, i) => {
+      const d = detectDoji(c)
+      if (d) found.push({ ...d, index: i, timestamp: c.timestamp, close: c.close })
+    })
+    setPatterns(found)
+  }
+
   function calcCPR(prev) {
     if (!prev) return null
     const P = (prev.high + prev.low + prev.close) / 3
@@ -93,8 +129,8 @@ export default function Home() {
     return { P, TC: Math.max(TC, BC), BC: Math.min(TC, BC) }
   }
 
-  function calcSR(data, bucketSize) {
-    const bSize = bucketSize || (Math.max(...data.map(d => d.high)) - Math.min(...data.map(d => d.low))) / 20
+  function calcSR(data) {
+    const bSize = (Math.max(...data.map(d => d.high)) - Math.min(...data.map(d => d.low))) / 20
     const clusters = {}
     data.forEach(d => {
       [d.high, d.low, d.close].forEach(p => {
@@ -115,7 +151,7 @@ export default function Home() {
 
   useEffect(() => {
     if (candles.length) renderChart()
-  }, [candles, showCPR, showSR])
+  }, [candles, showCPR, showSR, showDoji])
 
   function renderChart() {
     const data = candles
@@ -153,6 +189,7 @@ export default function Home() {
     const py = p => PAD.t + ch * (1 - (p - priceMin) / priceRange)
     const cx = i => PAD.l + slotW * i + slotW / 2
 
+    // Grid
     ctx.lineWidth = 0.5
     for (let i = 0; i <= 5; i++) {
       const p = priceMin + priceRange * i / 5
@@ -165,9 +202,11 @@ export default function Home() {
       ctx.fillText(p.toFixed(1), PAD.l - 4, y + 3)
     }
 
+    // Axis
     ctx.strokeStyle = axisC; ctx.lineWidth = 0.5
     ctx.beginPath(); ctx.moveTo(PAD.l, PAD.t); ctx.lineTo(PAD.l, MH - PAD.b); ctx.lineTo(W - PAD.r, MH - PAD.b); ctx.stroke()
 
+    // X labels
     ctx.fillStyle = textC; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'
     const step = Math.ceil(n / 10)
     data.forEach((d, i) => {
@@ -176,6 +215,7 @@ export default function Home() {
       ctx.fillText(ts.slice(5), cx(i), MH - PAD.b + 14)
     })
 
+    // S/R zones
     if (showSR) {
       const levels = calcSR(data)
       levels.forEach(level => {
@@ -190,19 +230,14 @@ export default function Home() {
         ctx.font = '9px sans-serif'; ctx.textAlign = 'left'
         ctx.fillText('S/R ' + level.toFixed(1), W - PAD.r + 2, y + 3)
       })
-      ctx.textAlign = 'right'
     }
 
+    // CPR
     if (showCPR && data.length > 1) {
       const prev = data[data.length - 2]
       const cpr = calcCPR({ high: prev.high, low: prev.low, close: prev.close })
       if (cpr) {
-        const lines = [
-          { label: 'P', value: cpr.P },
-          { label: 'TC', value: cpr.TC },
-          { label: 'BC', value: cpr.BC }
-        ]
-        lines.forEach(({ label, value }) => {
+        [{ label: 'P', value: cpr.P }, { label: 'TC', value: cpr.TC }, { label: 'BC', value: cpr.BC }].forEach(({ label, value }) => {
           const y = py(value)
           if (y < PAD.t || y > MH - PAD.b) return
           ctx.strokeStyle = CPR_COLOR
@@ -214,10 +249,10 @@ export default function Home() {
           ctx.font = 'bold 9px sans-serif'; ctx.textAlign = 'right'
           ctx.fillText(`${label} ${value.toFixed(1)}`, PAD.l - 4, y + 3)
         })
-        ctx.textAlign = 'right'
       }
     }
 
+    // Candles
     data.forEach((d, i) => {
       const x = cx(i)
       const bull = d.close >= d.open
@@ -228,11 +263,33 @@ export default function Home() {
 
       ctx.strokeStyle = color; ctx.lineWidth = Math.max(1, slotW * 0.08)
       ctx.beginPath(); ctx.moveTo(x, py(d.high)); ctx.lineTo(x, py(d.low)); ctx.stroke()
-
       ctx.fillStyle = color
       ctx.fillRect(x - bodyW / 2, top, bodyW, bodyH)
     })
 
+    // Doji markers
+    if (showDoji) {
+      patterns.forEach(p => {
+        const x = cx(p.index)
+        const d = data[p.index]
+        const yHigh = py(d.high)
+        const yLow = py(d.low)
+
+        // Circle marker
+        ctx.beginPath()
+        ctx.arc(x, yHigh - 8, 5, 0, Math.PI * 2)
+        ctx.fillStyle = DOJI_COLOR
+        ctx.fill()
+
+        // Label
+        ctx.fillStyle = DOJI_COLOR
+        ctx.font = 'bold 7px sans-serif'
+        ctx.textAlign = 'center'
+        ctx.fillText(p.label, x, yHigh - 5)
+      })
+    }
+
+    // Volume
     volCanvas.width = W * devicePixelRatio
     volCanvas.height = VH * devicePixelRatio
     volCanvas.style.width = W + 'px'
@@ -264,7 +321,11 @@ export default function Home() {
   useEffect(() => {
     window.addEventListener('resize', renderChart)
     return () => window.removeEventListener('resize', renderChart)
-  }, [candles, showCPR, showSR])
+  }, [candles, showCPR, showSR, showDoji])
+
+  const dojiPatterns = patterns.filter(p => p.type === 'Doji')
+  const dragonflyPatterns = patterns.filter(p => p.type === 'Dragonfly Doji')
+  const gravestonePatterns = patterns.filter(p => p.type === 'Gravestone Doji')
 
   return (
     <>
@@ -336,6 +397,10 @@ export default function Home() {
               <input type="checkbox" checked={showSR} onChange={e => setShowSR(e.target.checked)} />
               <span>S/R Zones</span>
             </label>
+            <label className={styles.toggle}>
+              <input type="checkbox" checked={showDoji} onChange={e => setShowDoji(e.target.checked)} />
+              <span style={{ color: DOJI_COLOR }}>Doji Patterns</span>
+            </label>
             <span className={styles.candleCount}>{candles.length} candles</span>
           </div>
         )}
@@ -351,6 +416,33 @@ export default function Home() {
             <span><span className={styles.dot} style={{ background: BEAR }} /> Bearish</span>
             {showCPR && <span><span className={styles.dot} style={{ background: CPR_COLOR }} /> CPR</span>}
             {showSR && <span><span className={styles.dot} style={{ background: SR_COLOR }} /> S/R</span>}
+            {showDoji && <span><span className={styles.dot} style={{ background: DOJI_COLOR }} /> Doji</span>}
+          </div>
+        )}
+
+        {showDoji && patterns.length > 0 && (
+          <div className={styles.card} style={{ marginTop: 12 }}>
+            <div className={styles.cardTitle}>Detected Doji Patterns ({patterns.length} total)</div>
+            <div className={styles.row} style={{ gap: 16, marginBottom: 10 }}>
+              <span style={{ fontSize: 13, color: DOJI_COLOR }}>Doji: {dojiPatterns.length}</span>
+              <span style={{ fontSize: 13, color: BULL }}>Dragonfly: {dragonflyPatterns.length}</span>
+              <span style={{ fontSize: 13, color: BEAR }}>Gravestone: {gravestonePatterns.length}</span>
+            </div>
+            <div style={{ maxHeight: 180, overflowY: 'auto' }}>
+              {patterns.slice(-20).reverse().map((p, i) => (
+                <div key={i} style={{
+                  display: 'flex', justifyContent: 'space-between',
+                  padding: '4px 0', borderBottom: '0.5px solid var(--border, #e0e0e0)',
+                  fontSize: 12
+                }}>
+                  <span style={{ color: p.bullish === true ? BULL : p.bullish === false ? BEAR : DOJI_COLOR, fontWeight: 500 }}>
+                    {p.type}
+                  </span>
+                  <span style={{ color: '#888' }}>{p.timestamp.split('T')[0]}</span>
+                  <span style={{ color: '#888' }}>{parseFloat(p.close).toFixed(2)}</span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
       </div>
