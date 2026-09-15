@@ -1,3 +1,5 @@
+export const config = { maxDuration: 60 }
+
 export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' })
 
@@ -118,90 +120,7 @@ Return [] if no clear patterns found. Be strict -- only return high-quality, cle
       if (jsonMatch) chartPatterns = JSON.parse(jsonMatch[0])
     } catch (e) { chartPatterns = [] }
 
-    // Step 2: Detect CANDLESTICK PATTERNS from image (last 50 candles only)
-    let candlePatterns = []
-    if (imageBase64) {
-      const candleResponse = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': ANTHROPIC_API_KEY,
-          'anthropic-version': '2023-06-01'
-        },
-        body: JSON.stringify({
-          model: 'claude-opus-4-5',
-          max_tokens: 1024,
-          messages: [{
-            role: 'user',
-            content: [
-              { type: 'image', source: { type: 'base64', media_type: 'image/png', data: imageBase64 } },
-              {
-                type: 'text',
-                text: `Analyze this candlestick chart for ${symbol} on ${resolution} timeframe.
-${timestamps ? `Dates shown: ${timestamps[0]} to ${timestamps[timestamps.length-1]}` : ''}
-
-Identify ONLY these single/multi candlestick patterns (NOT chart patterns):
-- Morning Star (3 candles, bullish reversal at support)
-- Evening Star (3 candles, bearish reversal at resistance)
-- Bullish Engulfing (2 candles, bullish at support)
-- Bearish Engulfing (2 candles, bearish at resistance)
-- Hammer (1 candle, bullish at support, long lower wick)
-- Hanging Man (1 candle, bearish at resistance, long lower wick)
-- Inverted Hammer (1 candle, bullish at support, long upper wick)
-- Shooting Star (1 candle, bearish at resistance, long upper wick)
-- Doji (indecision)
-- Spinning Top (indecision)
-- Harami (indecision)
-- Marubozu (strong momentum)
-
-Rules:
-- Bullish patterns ONLY valid at support zones
-- Bearish patterns ONLY valid at resistance zones
-- Indecision: tradeValid = false
-
-Return ONLY valid JSON array:
-[
-  {
-    "pattern": "Hammer",
-    "signal": "Bullish",
-    "confidence": "High",
-    "notes": "Hammer at support with long lower wick",
-    "startDate": "2024-06-10",
-    "endDate": "2024-06-10",
-    "location": "at support zone ~23100",
-    "tradeValid": true,
-    "confluences": ["at key support", "long lower wick rejection"],
-    "entry": 23150,
-    "stopLoss": 22950,
-    "target1": 23400,
-    "target2": 23650,
-    "drawLines": [
-      {"type": "support", "price": 23100, "label": "Support"},
-      {"type": "entry", "price": 23150, "label": "Entry"},
-      {"type": "sl", "price": 22950, "label": "SL"},
-      {"type": "target", "price": 23400, "label": "T1"}
-    ]
-  }
-]
-
-Return [] if no clear candlestick patterns visible.`
-              }
-            ]
-          }]
-        })
-      })
-
-      const candleData = await candleResponse.json()
-      if (candleResponse.ok) {
-        const candleText = candleData.content[0]?.text || ''
-        try {
-          const jsonMatch = candleText.match(/\[[\s\S]*\]/)
-          if (jsonMatch) candlePatterns = JSON.parse(jsonMatch[0])
-        } catch (e) { candlePatterns = [] }
-      }
-    }
-
-    // Convert startIndex/endIndex to dates for chart patterns
+    // Convert startIndex/endIndex to dates
     chartPatterns = chartPatterns.map(p => {
       if (p.startIndex !== undefined && candles[p.startIndex]) {
         p.startDate = candles[p.startIndex].timestamp.slice(0, 10)
@@ -212,8 +131,8 @@ Return [] if no clear candlestick patterns visible.`
       return p
     })
 
-    const allPatterns = [...chartPatterns, ...candlePatterns]
-    return res.json({ patterns: allPatterns, chartPatternCount: chartPatterns.length, candlePatternCount: candlePatterns.length })
+    const allPatterns = [...chartPatterns]
+    return res.json({ patterns: allPatterns, chartPatternCount: chartPatterns.length, candlePatternCount: 0 })
 
   } catch (e) {
     return res.status(500).json({ error: e.message })
