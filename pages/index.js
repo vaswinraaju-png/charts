@@ -21,7 +21,6 @@ export default function Home() {
   const [candles, setCandles] = useState([])
   const [stats, setStats] = useState(null)
 
-  // Auth flow
   async function getAuthURL() {
     const res = await fetch('/api/auth')
     const { authURL } = await res.json()
@@ -62,7 +61,7 @@ export default function Home() {
   }
 
   async function loadCandles() {
-    const res = await fetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&resolution=${resolution}&limit=300`)
+    const res = await fetch(`/api/candles?symbol=${encodeURIComponent(symbol)}&resolution=${resolution}&limit=500`)
     const data = await res.json()
     if (data.candles && data.candles.length) {
       setCandles(data.candles)
@@ -86,7 +85,6 @@ export default function Home() {
     })
   }
 
-  // CPR calculation
   function calcCPR(prev) {
     if (!prev) return null
     const P = (prev.high + prev.low + prev.close) / 3
@@ -95,7 +93,6 @@ export default function Home() {
     return { P, TC: Math.max(TC, BC), BC: Math.min(TC, BC) }
   }
 
-  // S/R calculation (price cluster method)
   function calcSR(data, bucketSize) {
     const bSize = bucketSize || (Math.max(...data.map(d => d.high)) - Math.min(...data.map(d => d.low))) / 20
     const clusters = {}
@@ -117,9 +114,7 @@ export default function Home() {
   }, [])
 
   useEffect(() => {
-    if (candles.length) {
-      renderChart()
-    }
+    if (candles.length) renderChart()
   }, [candles, showCPR, showSR])
 
   function renderChart() {
@@ -131,7 +126,6 @@ export default function Home() {
     const W = mainCanvas.parentElement.offsetWidth || 680
     const MH = 340, VH = 80
 
-    // Setup main canvas
     mainCanvas.width = W * devicePixelRatio
     mainCanvas.height = MH * devicePixelRatio
     mainCanvas.style.width = W + 'px'
@@ -159,7 +153,6 @@ export default function Home() {
     const py = p => PAD.t + ch * (1 - (p - priceMin) / priceRange)
     const cx = i => PAD.l + slotW * i + slotW / 2
 
-    // Grid
     ctx.lineWidth = 0.5
     for (let i = 0; i <= 5; i++) {
       const p = priceMin + priceRange * i / 5
@@ -172,11 +165,9 @@ export default function Home() {
       ctx.fillText(p.toFixed(1), PAD.l - 4, y + 3)
     }
 
-    // Axis
     ctx.strokeStyle = axisC; ctx.lineWidth = 0.5
     ctx.beginPath(); ctx.moveTo(PAD.l, PAD.t); ctx.lineTo(PAD.l, MH - PAD.b); ctx.lineTo(W - PAD.r, MH - PAD.b); ctx.stroke()
 
-    // X labels
     ctx.fillStyle = textC; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'
     const step = Math.ceil(n / 10)
     data.forEach((d, i) => {
@@ -185,7 +176,6 @@ export default function Home() {
       ctx.fillText(ts.slice(5), cx(i), MH - PAD.b + 14)
     })
 
-    // S/R zones
     if (showSR) {
       const levels = calcSR(data)
       levels.forEach(level => {
@@ -203,7 +193,6 @@ export default function Home() {
       ctx.textAlign = 'right'
     }
 
-    // CPR levels
     if (showCPR && data.length > 1) {
       const prev = data[data.length - 2]
       const cpr = calcCPR({ high: prev.high, low: prev.low, close: prev.close })
@@ -229,7 +218,6 @@ export default function Home() {
       }
     }
 
-    // Candles
     data.forEach((d, i) => {
       const x = cx(i)
       const bull = d.close >= d.open
@@ -245,7 +233,6 @@ export default function Home() {
       ctx.fillRect(x - bodyW / 2, top, bodyW, bodyH)
     })
 
-    // Volume
     volCanvas.width = W * devicePixelRatio
     volCanvas.height = VH * devicePixelRatio
     volCanvas.style.width = W + 'px'
@@ -285,7 +272,6 @@ export default function Home() {
       <div className={styles.app}>
         <h1 className={styles.title}>Trading Chart</h1>
 
-        {/* Auth Section */}
         <div className={styles.card}>
           <div className={styles.cardTitle}>Fyers Auth</div>
           <div className={styles.row}>
@@ -301,7 +287,6 @@ export default function Home() {
           {token && <div className={styles.tokenBadge}>Token active</div>}
         </div>
 
-        {/* Fetch Section */}
         <div className={styles.card}>
           <div className={styles.cardTitle}>Fetch Data</div>
           <div className={styles.row}>
@@ -313,11 +298,18 @@ export default function Home() {
             />
             <select className={styles.select} value={resolution} onChange={e => setResolution(e.target.value)}>
               <option value="1">1 min</option>
+              <option value="3">3 min</option>
               <option value="5">5 min</option>
+              <option value="10">10 min</option>
               <option value="15">15 min</option>
+              <option value="30">30 min</option>
+              <option value="45">45 min</option>
               <option value="60">1 hr</option>
+              <option value="120">2 hr</option>
+              <option value="240">4 hr</option>
               <option value="D">Daily</option>
-              <option value="W">Weekly</option>
+              <option value="1W">Weekly</option>
+              <option value="1M">Monthly</option>
             </select>
             <button className={styles.btnPrimary} onClick={fetchAndLoad}>Fetch + Chart</button>
             <button className={styles.btn} onClick={loadCandles}>Load from DB</button>
@@ -325,7 +317,6 @@ export default function Home() {
           {status && <div className={styles.status}>{status}</div>}
         </div>
 
-        {/* Stats */}
         {stats && (
           <div className={styles.stats}>
             <div className={styles.stat}><div className={styles.statL}>High</div><div className={styles.statV}>{stats.high}</div></div>
@@ -335,7 +326,6 @@ export default function Home() {
           </div>
         )}
 
-        {/* Toggles */}
         {candles.length > 0 && (
           <div className={styles.toggleRow}>
             <label className={styles.toggle}>
@@ -350,13 +340,11 @@ export default function Home() {
           </div>
         )}
 
-        {/* Chart */}
-        <div className={styles.chartWrap} ref={null}>
+        <div className={styles.chartWrap}>
           <canvas ref={mainRef} style={{ display: 'block', width: '100%' }} />
           <canvas ref={volRef} style={{ display: 'block', width: '100%', marginTop: 4 }} />
         </div>
 
-        {/* Legend */}
         {candles.length > 0 && (
           <div className={styles.legend}>
             <span><span className={styles.dot} style={{ background: BULL }} /> Bullish</span>
