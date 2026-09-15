@@ -16,7 +16,7 @@ export default async function handler(req, res) {
       symbol,
       resolution: resolution || 'D',
       date_format: '1',
-      range_from: date_from || getDateNDaysAgo(365),
+      range_from: date_from || getDateNDaysAgo(resolution === 'D' || resolution === '1W' || resolution === '1M' ? 365 : 100),
       range_to: date_to || getToday(),
       cont_flag: '1'
     })
@@ -36,7 +36,7 @@ export default async function handler(req, res) {
     try {
       fyersData = JSON.parse(rawText)
     } catch (e) {
-      return res.status(500).json({ error: 'Fyers returned invalid JSON', raw: rawText.slice(0, 500), status: fyersRes.status })
+      return res.status(500).json({ error: 'Fyers returned invalid JSON', raw: rawText.slice(0, 500) })
     }
 
     if (fyersData.s !== 'ok') {
