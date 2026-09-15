@@ -6,82 +6,12 @@ const BULL = '#1baf7a'
 const BEAR = '#e34948'
 const CPR_COLOR = '#f59e0b'
 const SR_COLOR = '#6366f1'
-const TRI_COLOR = '#22d3ee'
 const PAD = { t: 20, r: 16, b: 30, l: 65 }
-
-// Linear regression: returns {slope, intercept}
-function linReg(points) {
-  const n = points.length
-  if (n < 2) return null
-  let sx = 0, sy = 0, sxy = 0, sx2 = 0
-  points.forEach(([x, y]) => { sx += x; sy += y; sxy += x * y; sx2 += x * x })
-  const slope = (n * sxy - sx * sy) / (n * sx2 - sx * sx)
-  const intercept = (sy - slope * sx) / n
-  return { slope, intercept }
-}
-
-function detectTriangles(data, lookback = 30) {
-  const results = []
-  if (data.length < lookback) return results
-
-  const start = Math.max(0, data.length - lookback)
-  const window = data.slice(start)
-  const n = window.length
-
-  // Find swing highs and lows
-  const swingHighs = [], swingLows = []
-  for (let i = 2; i < n - 2; i++) {
-    if (window[i].high >= window[i-1].high && window[i].high >= window[i-2].high &&
-        window[i].high >= window[i+1].high && window[i].high >= window[i+2].high) {
-      swingHighs.push([i, window[i].high])
-    }
-    if (window[i].low <= window[i-1].low && window[i].low <= window[i-2].low &&
-        window[i].low <= window[i+1].low && window[i].low <= window[i+2].low) {
-      swingLows.push([i, window[i].low])
-    }
-  }
-
-  if (swingHighs.length < 2 || swingLows.length < 2) return results
-
-  const highReg = linReg(swingHighs)
-  const lowReg = linReg(swingLows)
-  if (!highReg || !lowReg) return results
-
-  const highSlope = highReg.slope
-  const lowSlope = lowReg.slope
-
-  const FLAT = 0.15 // threshold for "flat" slope relative to price
-  const priceRange = Math.max(...data.map(d => d.high)) - Math.min(...data.map(d => d.low))
-  const flatThresh = priceRange * FLAT / n
-
-  let type = null
-  if (Math.abs(highSlope) < flatThresh && lowSlope > flatThresh) {
-    type = 'Ascending Triangle'
-  } else if (highSlope < -flatThresh && Math.abs(lowSlope) < flatThresh) {
-    type = 'Descending Triangle'
-  } else if (highSlope < -flatThresh && lowSlope > flatThresh) {
-    type = 'Symmetrical Triangle'
-  }
-
-  if (type) {
-    results.push({
-      type,
-      bullish: type === 'Ascending Triangle' ? true : type === 'Descending Triangle' ? false : null,
-      startIndex: start,
-      endIndex: data.length - 1,
-      highReg: { ...highReg, points: swingHighs.map(([i, v]) => [i + start, v]) },
-      lowReg: { ...lowReg, points: swingLows.map(([i, v]) => [i + start, v]) },
-      n,
-      start
-    })
-  }
-
-  return results
-}
 
 export default function Home() {
   const mainRef = useRef(null)
   const volRef = useRef(null)
+  const wrapRef = useRef(null)
   const [token, setToken] = useState('')
   const [authCode, setAuthCode] = useState('')
   const [symbol, setSymbol] = useState('NSE:NIFTY50-INDEX')
@@ -89,10 +19,10 @@ export default function Home() {
   const [status, setStatus] = useState('')
   const [showCPR, setShowCPR] = useState(false)
   const [showSR, setShowSR] = useState(false)
-  const [showTriangle, setShowTriangle] = useState(false)
   const [candles, setCandles] = useState([])
   const [stats, setStats] = useState(null)
-  const [triangles, setTriangles] = useState([])
+  const [patterns, setPatterns] = useState([])
+  const [detecting, setDetecting] = useState(false)
 
   async function getAuthURL() {
     const res = await fetch('/api/auth')
@@ -139,7 +69,7 @@ export default function Home() {
     if (data.candles && data.candles.length) {
       setCandles(data.candles)
       computeStats(data.candles)
-      setTriangles(detectTriangles(data.candles))
+      setPatterns([])
       setStatus(`Loaded ${data.candles.length} candles`)
     } else {
       setStatus('No data. Fetch first.')
@@ -182,6 +112,58 @@ export default function Home() {
       .map(([price]) => parseFloat(price))
   }
 
+  async function detectPatterns() {
+    if (!mainRef.current) return
+    setDetecting(true)
+    setPatterns([])
+
+    try {
+      // Merge main chart + volume into one image
+      const mainCanvas = mainRef.current
+      const volCanvas = volRef.current
+      const W = mainCanvas.width / devicePixelRatio
+      const MH = mainCanvas.height / devicePixelRatio
+      const VH = volCanvas.height / devicePixelRatio
+
+      const combined = document.createElement('canvas')
+      combined.width = W * devicePixelRatio
+      combined.height = (MH + VH) * devicePixelRatio
+      combined.style.width = W + 'px'
+      combined.style.height = (MH + VH) + 'px'
+      const ctx = combined.getContext('2d')
+
+      // Dark background
+      ctx.fillStyle = '#1a1a1a'
+      ctx.fillRect(0, 0, combined.width, combined.height)
+      ctx.drawImage(mainCanvas, 0, 0)
+      ctx.drawImage(volCanvas, 0, mainCanvas.height)
+
+      const dataURL = combined.toDataURL('image/png')
+      const base64 = dataURL.split(',')[1]
+
+      const res = await fetch('/api/detect-patterns', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageBase64: base64,
+          symbol,
+          resolution,
+        })
+      })
+
+      const data = await res.json()
+      if (data.error) {
+        setStatus('Pattern detection error: ' + data.error)
+      } else {
+        setPatterns(data.patterns || [])
+        setStatus(`Found ${data.patterns?.length || 0} pattern(s)`)
+      }
+    } catch (e) {
+      setStatus('Error: ' + e.message)
+    }
+    setDetecting(false)
+  }
+
   useEffect(() => {
     const saved = localStorage.getItem('fyers_token')
     if (saved) { setToken(saved); setStatus('Token loaded from storage') }
@@ -189,7 +171,7 @@ export default function Home() {
 
   useEffect(() => {
     if (candles.length) renderChart()
-  }, [candles, showCPR, showSR, showTriangle])
+  }, [candles, showCPR, showSR])
 
   function renderChart() {
     const data = candles
@@ -198,7 +180,7 @@ export default function Home() {
     const mainCanvas = mainRef.current
     const volCanvas = volRef.current
     const W = mainCanvas.parentElement.offsetWidth || 680
-    const MH = 380, VH = 80
+    const MH = 340, VH = 80
 
     mainCanvas.width = W * devicePixelRatio
     mainCanvas.height = MH * devicePixelRatio
@@ -208,6 +190,10 @@ export default function Home() {
     ctx.scale(devicePixelRatio, devicePixelRatio)
 
     const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+    const bg = isDark ? '#1a1a1a' : '#ffffff'
+    ctx.fillStyle = bg
+    ctx.fillRect(0, 0, W, MH)
+
     const gridC = isDark ? 'rgba(255,255,255,0.07)' : 'rgba(0,0,0,0.07)'
     const textC = '#898781'
     const axisC = isDark ? '#383835' : '#c3c2b7'
@@ -238,11 +224,9 @@ export default function Home() {
       ctx.fillText(p.toFixed(1), PAD.l - 4, y + 3)
     }
 
-    // Axis
     ctx.strokeStyle = axisC; ctx.lineWidth = 0.5
     ctx.beginPath(); ctx.moveTo(PAD.l, PAD.t); ctx.lineTo(PAD.l, MH - PAD.b); ctx.lineTo(W - PAD.r, MH - PAD.b); ctx.stroke()
 
-    // X labels
     ctx.fillStyle = textC; ctx.font = '10px sans-serif'; ctx.textAlign = 'center'
     const step = Math.ceil(n / 10)
     data.forEach((d, i) => {
@@ -251,7 +235,6 @@ export default function Home() {
       ctx.fillText(ts.slice(5), cx(i), MH - PAD.b + 14)
     })
 
-    // S/R
     if (showSR) {
       const levels = calcSR(data)
       levels.forEach(level => {
@@ -265,7 +248,6 @@ export default function Home() {
       })
     }
 
-    // CPR
     if (showCPR && data.length > 1) {
       const prev = data[data.length - 2]
       const cpr = calcCPR({ high: prev.high, low: prev.low, close: prev.close })
@@ -282,52 +264,6 @@ export default function Home() {
       }
     }
 
-    // Triangle overlay
-    if (showTriangle && triangles.length > 0) {
-      triangles.forEach(tri => {
-        const { highReg, lowReg, startIndex, endIndex } = tri
-        const x0 = cx(startIndex)
-        const x1 = cx(endIndex)
-
-        // High trendline
-        const highY0 = py(highReg.slope * (startIndex - tri.start) + highReg.intercept)
-        const highY1 = py(highReg.slope * (endIndex - tri.start) + highReg.intercept)
-
-        // Low trendline
-        const lowY0 = py(lowReg.slope * (startIndex - tri.start) + lowReg.intercept)
-        const lowY1 = py(lowReg.slope * (endIndex - tri.start) + lowReg.intercept)
-
-        ctx.strokeStyle = TRI_COLOR
-        ctx.lineWidth = 1.5
-        ctx.setLineDash([])
-
-        // Draw upper trendline
-        ctx.beginPath(); ctx.moveTo(x0, highY0); ctx.lineTo(x1, highY1); ctx.stroke()
-        // Draw lower trendline
-        ctx.beginPath(); ctx.moveTo(x0, lowY0); ctx.lineTo(x1, lowY1); ctx.stroke()
-        // Connect start
-        ctx.beginPath(); ctx.moveTo(x0, highY0); ctx.lineTo(x0, lowY0); ctx.stroke()
-
-        // Swing high dots
-        highReg.points.forEach(([i, v]) => {
-          ctx.beginPath(); ctx.arc(cx(i), py(v), 3, 0, Math.PI * 2)
-          ctx.fillStyle = TRI_COLOR; ctx.fill()
-        })
-        // Swing low dots
-        lowReg.points.forEach(([i, v]) => {
-          ctx.beginPath(); ctx.arc(cx(i), py(v), 3, 0, Math.PI * 2)
-          ctx.fillStyle = TRI_COLOR; ctx.fill()
-        })
-
-        // Label
-        ctx.fillStyle = TRI_COLOR
-        ctx.font = 'bold 11px sans-serif'
-        ctx.textAlign = 'center'
-        ctx.fillText(tri.type, (x0 + x1) / 2, Math.min(highY0, highY1) - 10)
-      })
-    }
-
-    // Candles
     data.forEach((d, i) => {
       const x = cx(i)
       const bull = d.close >= d.open
@@ -349,6 +285,10 @@ export default function Home() {
     volCanvas.style.height = VH + 'px'
     const vctx = volCanvas.getContext('2d')
     vctx.scale(devicePixelRatio, devicePixelRatio)
+
+    const isDarkVol = window.matchMedia('(prefers-color-scheme: dark)').matches
+    vctx.fillStyle = isDarkVol ? '#1a1a1a' : '#ffffff'
+    vctx.fillRect(0, 0, W, VH)
 
     const vols = data.map(d => d.volume)
     const maxV = Math.max(...vols) || 1
@@ -374,7 +314,7 @@ export default function Home() {
   useEffect(() => {
     window.addEventListener('resize', renderChart)
     return () => window.removeEventListener('resize', renderChart)
-  }, [candles, showCPR, showSR, showTriangle])
+  }, [candles, showCPR, showSR])
 
   return (
     <>
@@ -446,46 +386,79 @@ export default function Home() {
               <input type="checkbox" checked={showSR} onChange={e => setShowSR(e.target.checked)} />
               <span>S/R Zones</span>
             </label>
-            <label className={styles.toggle}>
-              <input type="checkbox" checked={showTriangle} onChange={e => setShowTriangle(e.target.checked)} />
-              <span style={{ color: TRI_COLOR }}>Triangles</span>
-            </label>
             <span className={styles.candleCount}>{candles.length} candles</span>
           </div>
         )}
 
-        <div className={styles.chartWrap}>
+        <div className={styles.chartWrap} ref={wrapRef}>
           <canvas ref={mainRef} style={{ display: 'block', width: '100%' }} />
           <canvas ref={volRef} style={{ display: 'block', width: '100%', marginTop: 4 }} />
         </div>
 
         {candles.length > 0 && (
-          <div className={styles.legend}>
-            <span><span className={styles.dot} style={{ background: BULL }} /> Bullish</span>
-            <span><span className={styles.dot} style={{ background: BEAR }} /> Bearish</span>
-            {showCPR && <span><span className={styles.dot} style={{ background: CPR_COLOR }} /> CPR</span>}
-            {showSR && <span><span className={styles.dot} style={{ background: SR_COLOR }} /> S/R</span>}
-            {showTriangle && <span><span className={styles.dot} style={{ background: TRI_COLOR }} /> Triangle</span>}
-          </div>
+          <>
+            <div className={styles.legend}>
+              <span><span className={styles.dot} style={{ background: BULL }} /> Bullish</span>
+              <span><span className={styles.dot} style={{ background: BEAR }} /> Bearish</span>
+              {showCPR && <span><span className={styles.dot} style={{ background: CPR_COLOR }} /> CPR</span>}
+              {showSR && <span><span className={styles.dot} style={{ background: SR_COLOR }} /> S/R</span>}
+            </div>
+
+            <button
+              className={styles.btnPrimary}
+              onClick={detectPatterns}
+              disabled={detecting}
+              style={{ marginTop: 12, width: '100%', padding: '10px', fontSize: 14 }}
+            >
+              {detecting ? 'Analysing chart with AI...' : 'Detect Patterns with AI'}
+            </button>
+          </>
         )}
 
-        {showTriangle && (
+        {patterns.length > 0 && (
           <div className={styles.card} style={{ marginTop: 12 }}>
-            <div className={styles.cardTitle}>Triangle Patterns Detected</div>
-            {triangles.length === 0 ? (
-              <div style={{ fontSize: 13, color: '#888' }}>No triangle patterns found in last 30 candles. Try Daily or Weekly timeframe.</div>
-            ) : triangles.map((t, i) => (
-              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px 0', borderBottom: '0.5px solid var(--border, #e0e0e0)' }}>
-                <span style={{
-                  background: TRI_COLOR + '22', color: TRI_COLOR,
-                  padding: '3px 10px', borderRadius: 6, fontSize: 13, fontWeight: 500
-                }}>{t.type}</span>
-                <span style={{ fontSize: 13, color: t.bullish === true ? BULL : t.bullish === false ? BEAR : '#888' }}>
-                  {t.bullish === true ? '↑ Bullish breakout expected' : t.bullish === false ? '↓ Bearish breakout expected' : '↕ Breakout either way'}
-                </span>
-                <span style={{ fontSize: 12, color: '#888', marginLeft: 'auto' }}>
-                  Last {t.n} candles
-                </span>
+            <div className={styles.cardTitle}>AI Pattern Analysis -- {symbol} {resolution}</div>
+            {patterns.map((p, i) => (
+              <div key={i} style={{
+                padding: '12px 0',
+                borderBottom: i < patterns.length - 1 ? '0.5px solid var(--border, #e0e0e0)' : 'none'
+              }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+                  <span style={{
+                    background: p.signal === 'Bullish' ? 'rgba(27,175,122,0.15)' : p.signal === 'Bearish' ? 'rgba(227,73,72,0.15)' : 'rgba(99,102,241,0.15)',
+                    color: p.signal === 'Bullish' ? BULL : p.signal === 'Bearish' ? BEAR : '#6366f1',
+                    padding: '3px 10px', borderRadius: 6, fontSize: 13, fontWeight: 500
+                  }}>{p.pattern}</span>
+                  <span style={{
+                    fontSize: 12,
+                    color: p.signal === 'Bullish' ? BULL : p.signal === 'Bearish' ? BEAR : '#888'
+                  }}>{p.signal === 'Bullish' ? '↑' : p.signal === 'Bearish' ? '↓' : '↕'} {p.signal}</span>
+                  <span style={{
+                    marginLeft: 'auto', fontSize: 11,
+                    color: p.confidence === 'High' ? BULL : p.confidence === 'Low' ? BEAR : '#f59e0b'
+                  }}>Confidence: {p.confidence}</span>
+                </div>
+
+                {p.notes && (
+                  <div style={{ fontSize: 12, color: '#888', marginBottom: 6 }}>{p.notes}</div>
+                )}
+
+                {(p.entry || p.stopLoss || p.target) && (
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    {p.entry && <span style={{ fontSize: 12 }}>
+                      <span style={{ color: '#888' }}>Entry: </span>
+                      <span style={{ color: '#f0efec', fontWeight: 500 }}>{p.entry}</span>
+                    </span>}
+                    {p.stopLoss && <span style={{ fontSize: 12 }}>
+                      <span style={{ color: '#888' }}>SL: </span>
+                      <span style={{ color: BEAR, fontWeight: 500 }}>{p.stopLoss}</span>
+                    </span>}
+                    {p.target && <span style={{ fontSize: 12 }}>
+                      <span style={{ color: '#888' }}>Target: </span>
+                      <span style={{ color: BULL, fontWeight: 500 }}>{p.target}</span>
+                    </span>}
+                  </div>
+                )}
               </div>
             ))}
           </div>
