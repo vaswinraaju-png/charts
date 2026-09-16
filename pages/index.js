@@ -45,6 +45,14 @@ export default function Home() {
   const [stats, setStats] = useState(null)
   const [patterns, setPatterns] = useState([])
   const [detecting, setDetecting] = useState(false)
+  const [agentRunning, setAgentRunning] = useState(false)
+  const [agentSymbol, setAgentSymbol] = useState('NSE:NIFTY50-INDEX')
+  const [agentResolution, setAgentResolution] = useState('5')
+  const [agentInterval, setAgentInterval] = useState(5)
+  const [alerts, setAlerts] = useState([])
+  const [seenPatterns, setSeenPatterns] = useState([])
+  const [showAlerts, setShowAlerts] = useState(false)
+  const agentRef = useRef(null)
   const [activePattern, setActivePattern] = useState(null)
 
   // Viewport state
@@ -177,6 +185,51 @@ export default function Home() {
   }
 
   function togglePattern(idx) { setActivePattern(prev => prev === idx ? null : idx) }
+
+  async function runAgentCycle(sym, res, seen) {
+    try {
+      const r = await fetch('/api/agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol: sym, resolution: res, access_token: token, seenPatterns: seen })
+      })
+      const data = await r.json()
+      if (data.error) { console.error('Agent error:', data.error); return seen }
+      if (data.patterns && data.patterns.length > 0) {
+        const newAlerts = data.patterns.map(p => ({
+          ...p, alertTime: new Date().toLocaleTimeString(), symbol: sym, resolution: res
+        }))
+        setAlerts(prev => [...newAlerts, ...prev].slice(0, 50))
+        // Update seen patterns
+        const newSeen = [...seen, ...data.patterns.map(p => `${p.pattern}-${p.startDate}-${p.endDate}`)]
+        return newSeen
+      }
+      return seen
+    } catch(e) { console.error('Agent cycle error:', e); return seen }
+  }
+
+  function startAgent() {
+    if (!token) return setStatus('Get Fyers token first')
+    setAgentRunning(true)
+    setAlerts([])
+    setSeenPatterns([])
+    setStatus(`Agent started -- watching ${agentSymbol} ${agentResolution}min every ${agentInterval} mins`)
+
+    let currentSeen = []
+    // Run immediately
+    runAgentCycle(agentSymbol, agentResolution, currentSeen).then(s => { currentSeen = s })
+
+    // Then on interval
+    agentRef.current = setInterval(async () => {
+      currentSeen = await runAgentCycle(agentSymbol, agentResolution, currentSeen)
+    }, agentInterval * 60 * 1000)
+  }
+
+  function stopAgent() {
+    if (agentRef.current) clearInterval(agentRef.current)
+    setAgentRunning(false)
+    setStatus('Agent stopped')
+  }
 
   const renderChart = useCallback(() => {
     if (!candles.length || !mainRef.current) return
@@ -504,6 +557,87 @@ export default function Home() {
       <Head><title>Trading Chart</title></Head>
       <div className={styles.app}>
         <h1 className={styles.title}>Trading Chart</h1>
+
+        {/* Agent Panel */}
+        <div className={styles.card} style={{ border: agentRunning ? '1px solid #1baf7a' : undefined }}>
+          <div className={styles.cardTitle} style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <span style={{ width: 8, height: 8, borderRadius: '50%', background: agentRunning ? '#1baf7a' : '#444', display: 'inline-block', boxShadow: agentRunning ? '0 0 6px #1baf7a' : 'none' }} />
+            Pattern Monitor Agent
+            {alerts.length > 0 && (
+              <button onClick={() => setShowAlerts(v => !v)} style={{
+                marginLeft: 'auto', padding: '2px 10px', borderRadius: 6,
+                background: '#e34948', color: '#fff', border: 'none',
+                fontSize: 12, cursor: 'pointer', fontWeight: 600
+              }}>🔔 {alerts.length} Alert{alerts.length > 1 ? 's' : ''}</button>
+            )}
+          </div>
+          <div className={styles.row} style={{ flexWrap: 'wrap', gap: 8 }}>
+            <input className={styles.input} value={agentSymbol}
+              onChange={e => setAgentSymbol(e.target.value)}
+              placeholder="NSE:NIFTY50-INDEX" disabled={agentRunning}
+              style={{ minWidth: 160 }} />
+            <select className={styles.select} value={agentResolution}
+              onChange={e => setAgentResolution(e.target.value)} disabled={agentRunning}>
+              <option value="1">1 min</option>
+              <option value="3">3 min</option>
+              <option value="5">5 min</option>
+              <option value="15">15 min</option>
+              <option value="30">30 min</option>
+              <option value="60">1 hr</option>
+            </select>
+            <select className={styles.select} value={agentInterval}
+              onChange={e => setAgentInterval(+e.target.value)} disabled={agentRunning}>
+              <option value="1">Every 1 min</option>
+              <option value="3">Every 3 min</option>
+              <option value="5">Every 5 min</option>
+              <option value="10">Every 10 min</option>
+              <option value="15">Every 15 min</option>
+            </select>
+            {!agentRunning
+              ? <button className={styles.btnPrimary} onClick={startAgent}>▶ Start Agent</button>
+              : <button className={styles.btn} onClick={stopAgent} style={{ borderColor: '#e34948', color: '#e34948' }}>■ Stop</button>
+            }
+          </div>
+
+          {/* Alerts panel */}
+          {showAlerts && alerts.length > 0 && (
+            <div style={{ marginTop: 12, maxHeight: 300, overflowY: 'auto' }}>
+              {alerts.map((a, i) => (
+                <div key={i} style={{
+                  padding: '10px 0', borderBottom: '0.5px solid #222',
+                  display: 'flex', flexDirection: 'column', gap: 4
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                    <span style={{
+                      background: a.signal === 'Bullish' ? 'rgba(27,175,122,0.15)' : 'rgba(227,73,72,0.15)',
+                      color: a.signal === 'Bullish' ? BULL : BEAR,
+                      padding: '2px 8px', borderRadius: 5, fontSize: 12, fontWeight: 600
+                    }}>{a.pattern}</span>
+                    <span style={{ fontSize: 12, color: a.signal === 'Bullish' ? BULL : BEAR }}>
+                      {a.signal === 'Bullish' ? '↑' : '↓'} {a.signal}
+                    </span>
+                    <span style={{ fontSize: 11, color: '#555' }}>{a.symbol} {a.resolution}min</span>
+                    <span style={{ fontSize: 11, color: '#555', marginLeft: 'auto' }}>🕐 {a.alertTime}</span>
+                  </div>
+                  {a.notes && <div style={{ fontSize: 11, color: '#888' }}>{a.notes}</div>}
+                  <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    {a.entry && <span style={{ fontSize: 12 }}><span style={{ color: '#888' }}>Entry </span><span style={{ color: '#e2e8f0', fontWeight: 600 }}>{a.entry}</span></span>}
+                    {a.stopLoss && <span style={{ fontSize: 12 }}><span style={{ color: '#888' }}>SL </span><span style={{ color: BEAR, fontWeight: 600 }}>{a.stopLoss}</span></span>}
+                    {a.target1 && <span style={{ fontSize: 12 }}><span style={{ color: '#888' }}>T1 </span><span style={{ color: BULL, fontWeight: 600 }}>{a.target1}</span></span>}
+                    {a.target2 && <span style={{ fontSize: 12 }}><span style={{ color: '#888' }}>T2 </span><span style={{ color: BULL, fontWeight: 600 }}>{a.target2}</span></span>}
+                  </div>
+                  {a.confluences && a.confluences.length > 0 && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+                      {a.confluences.map((c, ci) => (
+                        <span key={ci} style={{ background: 'rgba(99,102,241,0.12)', color: '#818cf8', padding: '1px 6px', borderRadius: 4, fontSize: 10 }}>✓ {c}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         <div className={styles.card}>
           <div className={styles.cardTitle}>Fyers Auth</div>
